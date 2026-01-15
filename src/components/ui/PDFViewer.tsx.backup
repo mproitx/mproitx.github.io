@@ -1,0 +1,477 @@
+import * as React from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { 
+  ZoomIn, 
+  ZoomOut, 
+  Download, 
+  Maximize2, 
+  Minimize2,
+  ChevronLeft,
+  ChevronRight,
+  RotateCw,
+  X,
+  Lightbulb,
+  Loader2,
+  BookOpen,
+  FileText,
+  Volume2,
+  VolumeX
+} from 'lucide-react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+// Configure PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+
+interface PDFViewerProps {
+  url: string;
+  title?: string;
+  onClose?: () => void;
+}
+
+export function PDFViewer({ url, title, onClose }: PDFViewerProps) {
+  const [numPages, setNumPages] = useState<number>(0);
+  const [pageNumber, setPageNumber] = useState<number>(1);
+  const [scale, setScale] = useState<number>(1.0);
+  const [rotation, setRotation] = useState<number>(0);
+  const [isFullscreen, setIsFullscreen] = useState(true); // Always fullscreen
+  const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'single' | 'double'>('single');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    // Initialize Audio Context
+    if (typeof window !== 'undefined') {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  // Play page turn sound
+  const playPageTurnSound = () => {
+    if (!soundEnabled || !audioContextRef.current) return;
+    
+    try {
+      const ctx = audioContextRef.current;
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      
+      // Create a subtle page turn sound
+      oscillator.frequency.setValueAtTime(200, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.1);
+      
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+      
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.1);
+    } catch (error) {
+      console.error('Error playing sound:', error);
+    }
+  };
+
+  function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
+    setNumPages(numPages);
+    setPageNumber(1);
+    setLoading(false);
+  }
+
+  function onDocumentLoadError(error: Error) {
+    console.error('Error loading PDF:', error);
+    setLoading(false);
+  }
+
+  const handleZoomIn = () => {
+    setScale(prev => Math.min(prev + 0.25, 3.0));
+  };
+
+  const handleZoomOut = () => {
+    setScale(prev => Math.max(prev - 0.25, 0.5));
+  };
+
+  const handleRotate = () => {
+    setRotation(prev => (prev + 90) % 360);
+  };
+
+  const handlePrevPage = () => {
+    if (pageNumber <= 1) return;
+    setIsAnimating(true);
+    playPageTurnSound();
+    setTimeout(() => {
+      setPageNumber(prev => Math.max(prev - (viewMode === 'double' ? 2 : 1), 1));
+      setIsAnimating(false);
+    }, 300);
+  };
+
+  const handleNextPage = () => {
+    if (pageNumber >= numPages) return;
+    setIsAnimating(true);
+    playPageTurnSound();
+    setTimeout(() => {
+      setPageNumber(prev => Math.min(prev + (viewMode === 'double' ? 2 : 1), numPages));
+      setIsAnimating(false);
+    }, 300);
+  };
+
+  const toggleFullscreen = () => {
+    // Do nothing - always fullscreen
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background flex flex-col">
+      {/* Toolbar */}
+      <Card className="rounded-none border-x-0 border-t-0 shrink-0">
+        <div className="p-2">
+          <div className="flex items-center justify-between gap-2">
+            {/* Left Section - Title and Close */}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {onClose && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onClose}
+                  className="shrink-0 h-8 w-8"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+              <h3 className="font-semibold truncate text-xs xl:text-sm">
+                {title || 'PDF दस्तावेज़'}
+              </h3>
+            </div>
+
+            {/* Right Section - Controls - Scrollable on mobile */}
+            <div className="flex items-center gap-1 shrink-0 overflow-x-auto scrollbar-hide">
+              {/* Page Navigation */}
+              {numPages > 0 && (
+                <div className="flex items-center gap-0.5 border rounded-lg p-0.5">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handlePrevPage}
+                    disabled={pageNumber <= 1 || isAnimating}
+                    className="h-7 w-7"
+                  >
+                    <ChevronLeft className="h-3 w-3" />
+                  </Button>
+                  <span className="text-[10px] xl:text-xs font-medium px-1 min-w-[2.5rem] text-center whitespace-nowrap">
+                    {pageNumber}/{numPages}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleNextPage}
+                    disabled={pageNumber >= numPages || isAnimating}
+                    className="h-7 w-7"
+                  >
+                    <ChevronRight className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
+
+              {/* Zoom Controls */}
+              <div className="flex items-center gap-0.5 border rounded-lg p-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleZoomOut}
+                  disabled={scale <= 0.5}
+                  className="h-7 w-7"
+                >
+                  <ZoomOut className="h-3 w-3" />
+                </Button>
+                <span className="text-[10px] xl:text-xs font-medium px-1 min-w-[2rem] text-center whitespace-nowrap">
+                  {Math.round(scale * 100)}%
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleZoomIn}
+                  disabled={scale >= 3.0}
+                  className="h-7 w-7"
+                >
+                  <ZoomIn className="h-3 w-3" />
+                </Button>
+              </div>
+
+              {/* Rotate */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleRotate}
+                className="h-7 w-7"
+                title="घुमाएं"
+              >
+                <RotateCw className="h-3 w-3" />
+              </Button>
+
+              {/* View Mode Toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setViewMode(prev => prev === 'single' ? 'double' : 'single')}
+                className="h-7 w-7"
+                title={viewMode === 'single' ? 'डबल पेज' : 'सिंगल पेज'}
+              >
+                {viewMode === 'single' ? <BookOpen className="h-3 w-3" /> : <FileText className="h-3 w-3" />}
+              </Button>
+
+              {/* Sound Toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSoundEnabled(prev => !prev)}
+                className="h-7 w-7"
+                title={soundEnabled ? 'साउंड बंद' : 'साउंड चालू'}
+              >
+                {soundEnabled ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
+    link.download = title || 'document.pdf';
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
+
+  return (
+    <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-background' : 'relative'}`}>
+      {/* Toolbar */}
+      <Card className={`${isFullscreen ? 'rounded-none' : 'rounded-t-lg'} border-b`}>
+        <div className="flex items-center justify-between p-3 gap-2 flex-wrap">
+          {/* Left Section - Title */}
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {onClose && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                className="shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+            <h3 className="font-semibold truncate text-sm xl:text-base">
+              {title || 'PDF दस्तावेज़'}
+            </h3>
+          </div>
+
+          {/* Right Section - Controls */}
+          <div className="flex items-center gap-1 xl:gap-2 shrink-0">
+            {/* Page Navigation */}
+            {numPages > 0 && (
+              <div className="flex items-center gap-1 border rounded-lg p-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handlePrevPage}
+                  disabled={pageNumber <= 1}
+                  className="h-8 w-8"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-xs font-medium px-2 min-w-[4rem] text-center">
+                  {pageNumber} / {numPages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleNextPage}
+                  disabled={pageNumber >= numPages}
+                  className="h-8 w-8"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-1 border rounded-lg p-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleZoomOut}
+                disabled={scale <= 0.5}
+                className="h-8 w-8"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <span className="text-xs font-medium px-2 min-w-[3rem] text-center">
+                {Math.round(scale * 100)}%
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleZoomIn}
+                disabled={scale >= 3.0}
+                className="h-8 w-8"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Rotate */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleRotate}
+              className="h-8 w-8"
+              title="घुमाएं"
+            >
+              <RotateCw className="h-4 w-4" />
+            </Button>
+
+            {/* View Mode Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setViewMode(prev => prev === 'single' ? 'double' : 'single')}
+              className="h-8 w-8"
+              title={viewMode === 'single' ? 'डबल पेज व्यू' : 'सिंगल पेज व्यू'}
+            >
+              {viewMode === 'single' ? <BookOpen className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+            </Button>
+
+            {/* Sound Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSoundEnabled(prev => !prev)}
+              className="h-8 w-8"
+              title={soundEnabled ? 'साउंड बंद करें' : 'साउंड चालू करें'}
+            >
+              {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </Button>
+
+            {/* Download */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleDownload}
+              className="h-8 w-8"
+              title="डाउनलोड करें"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+
+            {/* Fullscreen */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleFullscreen}
+              className="h-8 w-8"
+              title={isFullscreen ? 'छोटा करें' : 'पूर्ण स्क्रीन'}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-4 w-4" />
+              ) : (
+                <Maximize2 className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* PDF Viewer */}
+      <div 
+        className={`bg-muted/30 overflow-auto ${
+          isFullscreen ? 'h-[calc(100vh-4rem)]' : 'h-[60vh] xl:h-[calc(100vh-10rem)]'
+        }`}
+      >
+        <div className="flex items-center justify-center min-h-full p-2 xl:p-4">
+          <Document
+            file={url}
+            onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={onDocumentLoadError}
+            loading={
+              <div className="flex flex-col items-center gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">PDF लोड हो रहा है...</p>
+              </div>
+            }
+            error={
+              <div className="flex flex-col items-center gap-4 p-6 bg-destructive/10 rounded-lg">
+                <p className="text-sm text-destructive">PDF लोड करने में त्रुटि। कृपया फिर से प्रयास करें।</p>
+              </div>
+            }
+          >
+            <div 
+              className={`flex gap-4 transition-all duration-300 ${
+                isAnimating ? 'opacity-50 scale-95' : 'opacity-100 scale-100'
+              }`}
+              style={{
+                transform: isAnimating ? 'rotateY(5deg)' : 'rotateY(0deg)',
+                transformStyle: 'preserve-3d',
+              }}
+            >
+              {/* Single Page View */}
+              {viewMode === 'single' && (
+                <Page
+                  pageNumber={pageNumber}
+                  scale={scale}
+                  rotate={rotation}
+                  className="border-2 border-border rounded-lg shadow-2xl transition-transform duration-300"
+                  renderTextLayer={true}
+                  renderAnnotationLayer={true}
+                />
+              )}
+
+              {/* Double Page View */}
+              {viewMode === 'double' && (
+                <>
+                  {/* Left Page */}
+                  {pageNumber > 1 && (
+                    <Page
+                      pageNumber={pageNumber - 1}
+                      scale={scale * 0.8}
+                      rotate={rotation}
+                      className="border-2 border-border rounded-lg shadow-2xl transition-transform duration-300"
+                      renderTextLayer={true}
+                      renderAnnotationLayer={true}
+                    />
+                  )}
+                  
+                  {/* Right Page */}
+                  <Page
+                    pageNumber={pageNumber}
+                    scale={scale * 0.8}
+                    rotate={rotation}
+                    className="border-2 border-border rounded-lg shadow-2xl transition-transform duration-300"
+                    renderTextLayer={true}
+                    renderAnnotationLayer={true}
+                  />
+                </>
+              )}
+            </div>
+          </Document>
+        </div>
+      </div>
+
+      {/* Mobile Helper Text */}
+      <div className="xl:hidden p-2 text-center bg-muted/50">
+        <p className="text-xs text-muted-foreground">
+          <Lightbulb className="inline h-4 w-4" /> बेहतर अनुभव के लिए पूर्ण स्क्रीन मोड का उपयोग करें या PDF डाउनलोड करें
+        </p>
+      </div>
+    </div>
+  );
+}
